@@ -35,6 +35,7 @@ import org.sonar.api.server.authentication.UserIdentity;
 import org.sonar.api.utils.log.Logger;
 import org.sonar.api.utils.log.Loggers;
 
+import javax.net.ssl.*;
 import javax.servlet.http.HttpServletRequest;
 import java.io.IOException;
 import java.util.Collection;
@@ -165,11 +166,49 @@ public class GitLabIdentityProvider implements OAuth2IdentityProvider {
         if (!isEnabled()) {
             throw new IllegalStateException("GitLab Authentication is disabled");
         }
+        // oauth2 验证的时候,不验证gitlab证书
+        if (gitLabConfiguration.ignoreCertificate()) {
+            ignoreCertificateErrors();
+        }
         ServiceBuilder serviceBuilder = new ServiceBuilder().provider(new GitLabOAuthApi(gitLabConfiguration.url())).apiKey(gitLabConfiguration.applicationId()).apiSecret(gitLabConfiguration.secret())
                 .grantType(OAuthConstants.AUTHORIZATION_CODE).callback(context.getCallbackUrl());
         if (gitLabConfiguration.scope() != null && !GitLabAuthPlugin.NONE_SCOPE.equals(gitLabConfiguration.scope())) {
             serviceBuilder.scope(gitLabConfiguration.scope());
         }
         return serviceBuilder;
+    }
+
+    private void ignoreCertificateErrors() {
+        TrustManager[] trustAllCerts = new TrustManager[]{new X509TrustManager() {
+            @Override
+            public java.security.cert.X509Certificate[] getAcceptedIssuers() {
+                return null;
+            }
+
+            @Override
+            public void checkClientTrusted(java.security.cert.X509Certificate[] certs, String authType) {
+            }
+
+            @Override
+            public void checkServerTrusted(java.security.cert.X509Certificate[] certs, String authType) {
+            }
+        }};
+        // Added per https://github.com/timols/java-gitlab-api/issues/44
+        HostnameVerifier nullVerifier = new HostnameVerifier() {
+            @Override
+            public boolean verify(String hostname, SSLSession session) {
+                return true;
+            }
+        };
+
+        try {
+            SSLContext sc = SSLContext.getInstance("SSL");
+            sc.init(null, trustAllCerts, new java.security.SecureRandom());
+            HttpsURLConnection.setDefaultSSLSocketFactory(sc.getSocketFactory());
+            // Added per https://github.com/timols/java-gitlab-api/issues/44
+            HttpsURLConnection.setDefaultHostnameVerifier(nullVerifier);
+        } catch (Exception e) {
+            // Ignore it
+        }
     }
 }
